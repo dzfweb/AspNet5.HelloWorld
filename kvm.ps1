@@ -7,6 +7,7 @@ param(
   [alias("p")][switch] $Persistent = $false,
   [alias("f")][switch] $Force = $false,
   [alias("r")][string] $Runtime,
+  [alias("arch")][string] $Architecture,
   [switch] $X86 = $false,
   [switch] $Amd64 = $false,
   #deprecated
@@ -20,16 +21,25 @@ param(
   [string] $Alias = $null,
   [switch] $NoNative = $false,
   [parameter(Position=1, ValueFromRemainingArguments=$true)]
-  [string[]]$Args=@()
+  [string[]]$Args=@(),
+  [switch] $Quiet,
+  [string] $OutputVariable,
+  [switch] $AssumeElevated
 )
 
 $selectedArch=$null;
 $defaultArch="x86"
 $selectedRuntime=$null
 $defaultRuntime="CLR"
-$userKrePath = $env:USERPROFILE + "\.kre"
+
+# Get or calculate userKrePath
+$userKrePath = $env:USER_KRE_PATH
+if(!$userKrePath) { $userKrePath = $env:USERPROFILE + "\.kre" }
 $userKrePackages = $userKrePath + "\packages"
-$globalKrePath = $env:ProgramFiles + "\KRE"
+
+# Get or calculate globalKrePath
+$globalKrePath = $env:GLOBAL_KRE_PATH
+if(!$globalKrePath) { $globalKrePath = $env:ProgramFiles + "\KRE" }
 $globalKrePackages = $globalKrePath + "\packages"
 $feed = $env:KRE_FEED
 
@@ -42,14 +52,16 @@ function String-IsEmptyOrWhitespace([string]$str) {
 
 if (!$feed)
 {
-    $feed = "https://www.myget.org/F/aspnetrelease/api/v2";
+    $feed = "https://www.myget.org/F/aspnetvnext/api/v2";
 }
+
+$feed = $feed.TrimEnd("/")
 
 $scriptPath = $myInvocation.MyCommand.Definition
 
 function Kvm-Help {
 @"
-K Runtime Environment Version Manager - Build 10050
+K Runtime Environment Version Manager - Build 10065
 
 USAGE: kvm <command> [options]
 
@@ -59,10 +71,10 @@ kvm upgrade [-X86][-Amd64] [-r|-Runtime CLR|CoreCLR] [-g|-Global] [-f|-Force] [-
   add KRE bin to user PATH environment variable
   -g|-Global        install to machine-wide location
   -f|-Force         upgrade even if latest is already installed
-  -Proxy <ADDRESS>  use given address as proxy when accessing remote server
+  -Proxy <ADDRESS>  use given address as proxy when accessing remote server (e.g. http://username:password@proxyserver:8080/). Alternatively set proxy using http_proxy environment variable.
   -NoNative         Do not generate native images (Effective only for CoreCLR flavors)
 
-kvm install <semver>|<alias>|<nupkg>|latest [-X86][-Amd64] [-r|-Runtime CLR|CoreCLR] [-a|-Alias <alias>] [-g|-Global] [-f|-Force] [-NoNative]
+kvm install <semver>|<alias>|<nupkg>|latest [-X86][-Amd64] [-r|-Runtime CLR|CoreCLR] [-a|-Alias <alias>] [-g|-Global] [-f|-Force] [-Proxy <ADDRESS>] [-NoNative]
   <semver>|<alias>  install requested KRE from feed
   <nupkg>           install requested KRE from package on local filesystem
   latest            install latest KRE from feed
@@ -71,6 +83,7 @@ kvm install <semver>|<alias>|<nupkg>|latest [-X86][-Amd64] [-r|-Runtime CLR|Core
   -a|-Alias <alias> set alias <alias> for requested KRE on install
   -g|-Global        install to machine-wide location
   -f|-Force         install even if specified version is already installed
+  -Proxy <ADDRESS>  use given address as proxy when accessing remote server (e.g. http://username:password@proxyserver:8080/). Alternatively set proxy using http_proxy environment variable.
   -NoNative         Do not generate native images (Effective only for CoreCLR flavors)
 
 kvm use <semver>|<alias>|<package>|none [-X86][-Amd64] [-r|-Runtime CLR|CoreCLR] [-p|-Persistent] [-g|-Global]
@@ -299,7 +312,7 @@ param(
     if (Needs-Elevation) {
       $arguments = "-ExecutionPolicy unrestricted & '$scriptPath' install '$versionOrAlias' -global $(Requested-Switches) -wait"
       Start-Process "$psHome\powershell.exe" -Verb runAs -ArgumentList $arguments -Wait
-      Kvm-Set-Global-Process-Path $versionOrAlias
+      Kvm-Use $kreFullName
       break
     }
     $packageFolder = $globalKrePackages
@@ -435,11 +448,11 @@ param(
   If (Needs-Elevation) {
     $arguments = "-ExecutionPolicy unrestricted & '$scriptPath' use '$versionOrAlias' -global $(Requested-Switches) -wait"
     Start-Process "$psHome\powershell.exe" -Verb runAs -ArgumentList $arguments -Wait
-    Kvm-Set-Global-Process-Path $versionOrAlias
+    Kvm-Use $versionOrAlias
     break
   }
 
-  Kvm-Set-Global-Process-Path "$versionOrAlias"
+  Kvm-Use "$versionOrAlias"
 
   if ($versionOrAlias -eq "none") {
     if ($Persistent) {
@@ -463,27 +476,6 @@ param(
     $machinePath = Change-Path $machinePath $kreBin ($globalKrePackages, $userKrePackages)
     [Environment]::SetEnvironmentVariable("Path", $machinePath, [System.EnvironmentVariableTarget]::Machine)
   }
-}
-
-function Kvm-Set-Global-Process-Path {
-param(
-  [string] $versionOrAlias
-)
-  if ($versionOrAlias -eq "none") {
-    Console-Write "Removing KRE from process PATH"
-    Set-Path (Change-Path $env:Path "" ($globalKrePackages, $userKrePackages))
-    return
-  }
-
-  $kreFullName = Requested-VersionOrAlias $versionOrAlias
-  $kreBin = Locate-KreBinFromFullName $kreFullName
-  if ($kreBin -eq $null) {
-    Console-Write "Cannot find $kreFullName, do you need to run 'kvm install $versionOrAlias'?"
-    return
-  }
-
-  Console-Write "Adding $kreBin to process PATH"
-  Set-Path (Change-Path $env:Path $kreBin ($globalKrePackages, $userKrePackages))
 }
 
 function Kvm-Use {
@@ -537,6 +529,7 @@ param(
   $aliasFilePath=$userKrePath + "\alias\" + $name + ".txt"
   if (!(Test-Path $aliasFilePath)) {
     Console-Write "Alias '$name' does not exist"
+    $script:exitCode = 1 # Return non-zero exit code for scripting
   } else {
     $aliasValue = (Get-Content ($userKrePath + "\alias\" + $name + ".txt"))
     Console-Write "Alias '$name' is set to $aliasValue" 
@@ -566,6 +559,7 @@ param(
       Remove-Item -literalPath $aliasPath
   } else {
       Console-Write "Cannot remove alias, '$name' is not a valid alias name"
+      $script:exitCode = 1 # Return non-zero exit code for scripting
   }
 }
 
@@ -686,6 +680,10 @@ SET "PATH=$newPath"
 }
 
 function Needs-Elevation() {
+  if($AssumeElevated) {
+    return $false
+  }
+
   $user = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
   $elevated = $user.IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
   return -NOT $elevated
@@ -725,33 +723,50 @@ function Validate-And-Santitize-Switches()
     Set-Variable -Name "selectedRuntime" -Value "svrc50" -Scope Script
   }
 
-  if ($X64) {
-    Console-Write "Warning: -x64 is deprecated, use -amd64 for new packages."
-    Set-Variable -Name "selectedArch" -Value "x64" -Scope Script
-  } elseif ($Amd64) {
-    Set-Variable -Name "selectedArch" -Value "amd64" -Scope Script
-  } elseif ($X86) {
-    Set-Variable -Name "selectedArch" -Value "x86" -Scope Script
+  if($Architecture) {
+    $validArchitectures = "amd64", "x86"
+    $match = $validArchitectures | ? { $_ -like $Architecture } | Select -First 1
+    if(!$match) {throw "'$architecture' is not a valid architecture"}
+    Set-Variable -Name "selectedArch" -Value $match -Scope Script
   }
+  else {
+    if ($X64) {
+      Console-Write "Warning: -x64 is deprecated, use -amd64 for new packages."
+      Set-Variable -Name "selectedArch" -Value "x64" -Scope Script
+    } elseif ($Amd64) {
+      Set-Variable -Name "selectedArch" -Value "amd64" -Scope Script
+    } elseif ($X86) {
+      Set-Variable -Name "selectedArch" -Value "x86" -Scope Script
+    }
+  }
+
 }
 
+$script:capturedOut = @()
 function Console-Write() {
 param(
   [Parameter(ValueFromPipeline=$true)]
   [string] $message
 )
-  if ($useHostOutputMethods) {
-    try {
-      Write-Host $message
-    }
-    catch {
-      $script:useHostOutputMethods = $false
-      Console-Write $message
-    }
+  if($OutputVariable) {
+    # Update the capture output
+    $script:capturedOut += @($message)
   }
-  else {
-    [Console]::WriteLine($message)
-  }  
+
+  if(!$Quiet) {
+    if ($useHostOutputMethods) {
+      try {
+        Write-Host $message
+      }
+      catch {
+        $script:useHostOutputMethods = $false
+        Console-Write $message
+      }
+    }
+    else {
+      [Console]::WriteLine($message)
+    }  
+  }
 }
 
 function Console-Write-Error() {
@@ -783,7 +798,7 @@ param(
   }
 }
 
-$exitCode = 0
+$script:exitCode = 0
 try {
   Validate-And-Santitize-Switches
   if ($Global) {
@@ -814,11 +829,16 @@ try {
 catch {
   Console-Write-Error $_
   Console-Write "Type 'kvm help' for help on how to use kvm."
-  $exitCode = -1
+  $script:exitCode = -1
 }
 if ($Wait) {
   Console-Write "Press any key to continue ..."
   $x = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown,AllowCtrlC")
 }
 
-exit $exitCode
+# If the user specified an output variable, push the value up to the parent scope
+if($OutputVariable) {
+  Set-Variable $OutputVariable $script:capturedOut -Scope 1
+}
+
+exit $script:exitCode
