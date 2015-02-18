@@ -27,7 +27,6 @@ namespace Microsoft.AspNet.Localization
 
         public virtual IHtmlLocalizer Create(string baseName, string location)
         {
-            var assembly = Assembly.Load(new AssemblyName(location));
             var localizer = _factory.Create(baseName, location);
             return new HtmlLocalizer(localizer, _encoder);
         }
@@ -135,7 +134,7 @@ namespace Microsoft.AspNet.Localization
         {
             _localizer = _factory.Create(
                 _env.ApplicationName + viewContext.ExecutingFilePath.Replace('/', '.'),
-                Assembly.Load(new AssemblyName(_env.ApplicationName)));
+                _env.ApplicationName);
         }
 
         public virtual IHtmlLocalizer WithCulture(CultureInfo culture) => _localizer.WithCulture(culture);
