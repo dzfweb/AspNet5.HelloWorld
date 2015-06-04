@@ -1,5 +1,5 @@
 {
-    "version": "1.0.0-*",
+    "version": "1.0.0-*",    
     "webroot": "wwwroot",
     "exclude": [
         "wwwroot"
@@ -15,7 +15,10 @@
         "Microsoft.AspNet.Hosting": "1.0.0-*",
         "Microsoft.AspNet.Server.IIS": "1.0.0-*",
         "Microsoft.AspNet.Server.WebListener": "1.0.0-*",
-        "Microsoft.AspNet.StaticFiles": "1.0.0-*"
+        "Microsoft.AspNet.StaticFiles": "1.0.0-*",
+        "System": "1.0.0-*",
+        "Microsoft.AspNet.Mvc": "6.0.0-beta5-14011",
+        "Newtonsoft.Json": "6.0.6"     
     },
     "commands": {
         "web": "Microsoft.AspNet.Hosting --server Microsoft.AspNet.Server.WebListener --server.urls http://localhost:5001",
@@ -26,3 +29,4 @@
         "dnxcore50": { }
     }
 }
+
